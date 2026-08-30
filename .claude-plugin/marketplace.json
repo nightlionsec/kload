@@ -1,0 +1,13 @@
+{
+  "name": "vinnytroia",
+  "owner": { "name": "Vinny Troia" },
+  "metadata": { "description": "Plugins by Vinny Troia" },
+  "plugins": [
+    {
+      "name": "kload",
+      "version": "0.1.0",
+      "source": "./",
+      "description": "Knowledge-file loader for Claude Code agents and skills"
+    }
+  ]
+}
