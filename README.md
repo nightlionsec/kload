@@ -16,6 +16,54 @@ Loading knowledge files · data-review agent
 
 The header is bold, the agent name cyan, ✓ green, ✗ red, and counts dim.
 
+## What a knowledge file is
+
+A knowledge file is a plain markdown document holding the durable, hard-won
+rules of one domain — the things that stay true across sessions and that a model
+cannot derive from the code in front of it. Not documentation for humans;
+operating instructions for an agent.
+
+```
+~/.claude/knowledge/
+  field-decisions.md     which columns are PII and which get dropped
+  merge-quality.md       what makes a join key trustworthy
+  catalog.md             resolve datasets in the catalog before searching
+```
+
+Three properties make one worth writing:
+
+- **Durable.** It outlives the session that produced it. A fix belongs in git; a
+  rule that would have prevented the fix belongs in a knowledge file.
+- **Non-derivable.** If the agent could work it out by reading the repo, leave
+  it out. Knowledge files are for what the code does *not* say — the mistake
+  made in March, the field that lies, the join that looks valid and isn't.
+- **Addressed to an agent.** Written as instruction, not narrative. "Scope by
+  `breach`, never by `country` — `country` is un-normalised on the raw path"
+  beats three paragraphs of background.
+
+### Why this is worth a plugin
+
+An agent definition is a job description. A knowledge file is the training the
+job assumes. Without a mechanism, every agent starts its first day having read
+neither — and the usual workaround, telling the agent to fetch its own files,
+is unverifiable from outside the model: it may read them, skim them, or claim
+to and not. You cannot audit an instruction; you can audit a delivery.
+
+Andrej Karpathy's framing of an LLM as an operating system is the useful lens
+here — the model as CPU, the context window as RAM, and everything else as
+storage that must be explicitly paged in to be usable at all. Nothing in
+storage affects the computation until something loads it. Knowledge files are
+the pages; kload is the loader. The agent stops being responsible for fetching
+its own memory, which is the part it was never able to do reliably.
+
+(That analogy is Karpathy's; the file convention here is not his — it is a
+local one, and the correspondence is a borrowed lens, not a cited standard.)
+
+The economics follow: one file, written once, read by every agent that declares
+it. Fixing a rule means editing one document rather than hunting the same
+paragraph across twenty-two agent definitions — which is precisely the drift
+that made this necessary.
+
 ## The problem
 
 Claude Code parses agent frontmatter but discards `knowledge_files` — nothing
@@ -27,12 +75,38 @@ from outside the model. kload gives that declaration a consumer.
 
 | Hook | Fires on | What kload does |
 |---|---|---|
-| `SubagentStart` | every subagent launch | resolve `agent_type` → definition → knowledge files |
-| `PreToolUse` (`Skill`) | every skill invocation | resolve skill name → `SKILL.md` → knowledge files |
-| `UserPromptSubmit` | every prompt | records `@agent-*` mentions (only used by `trigger: "explicit"`) |
+| `UserPromptSubmit` | every prompt | if you mentioned an agent, **show the report before it launches** |
+| `PreToolUse` (`Agent`\|`Task`) | every subagent spawn | **inject** the knowledge into the subagent's prompt |
+| `SubagentStart` | every subagent launch | inject via `additionalContext` — fallback only |
+| `PreToolUse` (`Skill`) | every skill invocation | show the report and inject, in one step |
 
-Both hooks return a `systemMessage` (what you see) and, when injection is on,
-`hookSpecificOutput.additionalContext` (what the agent receives).
+Each returns a `systemMessage` (what you see) and, when injection is on, the
+knowledge itself (what the agent receives).
+
+### Why it takes four hooks
+
+Two harness behaviours force the split, and both were found the hard way:
+
+**`SubagentStart` output arrives too late.** A subagent runs backgrounded, so
+its hook's `systemMessage` only surfaces when that stream flushes — after the
+agent has finished. Correct content, useless timing. `UserPromptSubmit` runs in
+the foreground *before* the spawn, so that is where the report is rendered. It
+fires on `@agent-name`, the picker's `@"name (agent)"`, and `/name`. When the
+model spawns an agent on its own initiative there is no prompt to read it from,
+and the late `SubagentStart` report is all you get.
+
+**`additionalContext` is capped.** Anything past roughly 2KB is written to a
+file and only a preview is inlined. A three-file declaration totalling 11.6KB
+delivered its first file whole, truncated the second mid-document, and dropped
+the third entirely — while the agent, seeing a `## Knowledge:` heading and its
+marker, correctly reported the injection as present. Silent, order-dependent
+loss with a confident receipt on top: the worst failure shape available.
+
+A subagent's prompt has no such cap, so injection goes through `PreToolUse`
+`updatedInput` on the spawn tool instead, and `SubagentStart` stands down —
+but *only* once the spawn hook has recorded that it actually delivered. If that
+matcher never fires, `SubagentStart` still injects the truncated payload.
+Lossy beats silent.
 
 ## Design invariants
 
@@ -98,6 +172,8 @@ Optional. Defaults work with the standard layout. Put settings in
   "skillDirs":    ["{cwd}/.claude/skills",    "{claude}/skills"],
   "trigger": "declared",
   "inject": false,
+  "announceOnPrompt": true,
+  "injectVia": "prompt",
   "showTokens": false,
   "color": "auto"
 }
@@ -107,13 +183,22 @@ Optional. Defaults work with the standard layout. Put settings in
 - `trigger`: `"declared"` acts on anything declaring knowledge files (default);
   `"explicit"` acts only on agents you `@agent-`mentioned in the last 10 minutes.
 - `inject`: `false` shows the report without touching the agent's context.
+- `announceOnPrompt`: render the report at prompt time, before the agent spawns.
+  Set `false` for the old after-the-fact `SubagentStart` report.
+- `injectVia`: `"prompt"` prepends the knowledge to the subagent's own prompt
+  via `PreToolUse` `updatedInput` — no size cap. `"context"` uses
+  `SubagentStart` `additionalContext`, which the harness truncates past ~2KB.
+  Prefer `"prompt"` unless you have a reason not to.
 - `showTokens`: adds a `~N tok` estimate per file and a total. Off by default —
   line counts are the signal that matters.
 - `color`: `"auto"` emits ANSI unless `NO_COLOR` is set or `TERM=dumb`;
   `"never"` if your terminal shows the escape codes literally.
 
 Env overrides: `KLOAD_KNOWLEDGE_DIRS` (colon-separated), `KLOAD_INJECT=1|0`,
-`KLOAD_TRIGGER`, `KLOAD_DEBUG=1` (appends to `~/.claude/kload-debug.log`).
+`KLOAD_TRIGGER`, `KLOAD_ANNOUNCE=1|0`, `KLOAD_INJECT_VIA=prompt|context`,
+`KLOAD_DEBUG=1` (appends to `~/.claude/kload-debug.log` — the fastest way to
+see which hooks actually fired, and the only way to catch a matcher that never
+registered).
 
 ## Install
 

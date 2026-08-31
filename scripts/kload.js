@@ -60,6 +60,18 @@ const DEFAULT_CONFIG = {
   showTokens: false,
   // ANSI colour: 'auto' | 'always' | 'never'.
   color: 'auto',
+  // Announce at prompt time when the user @agent-mentions an agent. The
+  // SubagentStart report only surfaces once the (backgrounded) agent finishes,
+  // which is too late to be useful. UserPromptSubmit renders in the foreground,
+  // before the agent is spawned. Set false to keep the old after-the-fact report.
+  announceOnPrompt: true,
+  // How injected knowledge is delivered.
+  //   'prompt'  -> prepended to the subagent's own prompt via PreToolUse
+  //                updatedInput. No size cap.
+  //   'context' -> SubagentStart additionalContext. The harness spills anything
+  //                over ~2KB to a file and inlines only a preview, so multi-file
+  //                declarations arrive silently truncated.
+  injectVia: 'prompt',
 };
 
 function expand(p, cwd) {
@@ -94,6 +106,9 @@ function loadConfig(cwd) {
   if (process.env.KLOAD_INJECT === '1') cfg.inject = true;
   if (process.env.KLOAD_INJECT === '0') cfg.inject = false;
   if (process.env.KLOAD_TRIGGER) cfg.trigger = process.env.KLOAD_TRIGGER;
+  if (process.env.KLOAD_ANNOUNCE === '1') cfg.announceOnPrompt = true;
+  if (process.env.KLOAD_ANNOUNCE === '0') cfg.announceOnPrompt = false;
+  if (process.env.KLOAD_INJECT_VIA) cfg.injectVia = process.env.KLOAD_INJECT_VIA;
 
   return cfg;
 }
@@ -477,31 +492,121 @@ function stateFile(sessionId) {
   return path.join(CLAUDE_DIR, 'kload-state', `${String(sessionId).replace(/[^A-Za-z0-9_-]/g, '')}.json`);
 }
 
-function recordExplicitMentions(input) {
-  const prompt = input.prompt || '';
-  const names = new Set();
-  for (const m of prompt.matchAll(/@agent-([A-Za-z0-9_-]+)/g)) names.add(m[1]);
-  for (const m of prompt.matchAll(/(?:^|\s)\/([A-Za-z0-9_-]+)/g)) names.add(m[1]);
-  if (!names.size) return;
-  const f = stateFile(input.session_id);
+function readState(sessionId) {
+  try {
+    return JSON.parse(fs.readFileSync(stateFile(sessionId), 'utf8'));
+  } catch (_) {
+    return {};
+  }
+}
+
+function writeState(sessionId, patch) {
+  const f = stateFile(sessionId);
   try {
     fs.mkdirSync(path.dirname(f), { recursive: true });
-    fs.writeFileSync(f, JSON.stringify({ names: [...names], ts: Date.now() }));
-    debug('recorded explicit mentions', [...names]);
+    const cur = readState(sessionId);
+    fs.writeFileSync(f, JSON.stringify(Object.assign({}, cur, patch, { ts: Date.now() })));
   } catch (e) {
     debug('state write failed', String(e));
   }
 }
 
+function mentionedNames(prompt) {
+  const names = new Set();
+  const p = String(prompt || '');
+  // `@agent-name` — typed form.
+  for (const m of p.matchAll(/@agent-([A-Za-z0-9_-]+)/g)) names.add(m[1]);
+  // `@"name (agent)"` / `@"name (skill)"` — what the picker inserts.
+  for (const m of p.matchAll(/@"([A-Za-z0-9_-]+)\s*\((?:agent|skill)\)"/g)) names.add(m[1]);
+  // `/skill-name` — slash form.
+  for (const m of p.matchAll(/(?:^|\s)\/([A-Za-z0-9_-]+)/g)) names.add(m[1]);
+  return [...names];
+}
+
+function recordExplicitMentions(input) {
+  const names = mentionedNames(input.prompt);
+  if (!names.length) return;
+  writeState(input.session_id, { names });
+  debug('recorded explicit mentions', names);
+}
+
 function wasExplicit(sessionId, name) {
+  const raw = readState(sessionId);
+  // Only honour a mention from the last 10 minutes.
+  if (Date.now() - (raw.ts || 0) > 10 * 60 * 1000) return false;
+  return (raw.names || []).includes(name);
+}
+
+/**
+ * Resolve one declared name to its knowledge records, without rendering.
+ * Returns null when the definition is missing or declares nothing.
+ */
+function recordsFor(kind, name, cwd, cfg) {
+  const defPath =
+    kind === 'agent' ? findAgentFile(name, cwd, cfg) : findSkillFile(name, cwd, cfg);
+  if (!defPath) return null;
+
+  let text;
   try {
-    const raw = JSON.parse(fs.readFileSync(stateFile(sessionId), 'utf8'));
-    // Only honour a mention from the last 10 minutes.
-    if (Date.now() - (raw.ts || 0) > 10 * 60 * 1000) return false;
-    return (raw.names || []).includes(name);
-  } catch (_) {
-    return false;
+    text = fs.readFileSync(defPath, 'utf8');
+  } catch (e) {
+    debug('definition unreadable', defPath, String(e));
+    return null;
   }
+
+  const [fmText] = splitFrontmatter(text);
+  const { files, source } = declaredKnowledge(parseYamlSubset(fmText));
+  if (!files.length) return null;
+
+  debug(kind, name, 'declares', files, 'via', source, 'from', defPath);
+  return files.map((f) => resolveKnowledgeFile(f, cwd, cfg));
+}
+
+/**
+ * Render the report at PROMPT time for any @agent-mentioned agent, so it lands
+ * in the foreground before the agent is spawned. Display only — injection still
+ * happens at SubagentStart, where it can reach the subagent's own context.
+ */
+function announceMentions(input, cfg, cwd) {
+  const names = mentionedNames(input.prompt);
+  if (!names.length) return null;
+
+  const blocks = [];
+  const announced = [];
+  for (const name of names) {
+    const records = recordsFor('agent', name, cwd, cfg) || recordsFor('skill', name, cwd, cfg);
+    if (!records) continue;
+    const kind = findAgentFile(name, cwd, cfg) ? 'agent' : 'skill';
+    blocks.push(render(kind, name, records, cfg));
+    announced.push(name);
+  }
+  if (!blocks.length) return null;
+
+  writeState(input.session_id, { announced });
+  debug('announced at prompt time', announced);
+  return { systemMessage: blocks.join('\n\n') };
+}
+
+/**
+ * True once per announcement: the prompt-time report already told the user, so
+ * the SubagentStart report would only repeat it (and arrive after the fact).
+ */
+function consumeInjected(sessionId, name) {
+  const raw = readState(sessionId);
+  const injected = raw.injected || [];
+  if (!injected.includes(name)) return false;
+  if (Date.now() - (raw.ts || 0) > 5 * 60 * 1000) return false;
+  writeState(sessionId, { injected: injected.filter((n) => n !== name) });
+  return true;
+}
+
+function consumeAnnouncement(sessionId, name) {
+  const raw = readState(sessionId);
+  const announced = raw.announced || [];
+  if (!announced.includes(name)) return false;
+  if (Date.now() - (raw.ts || 0) > 5 * 60 * 1000) return false;
+  writeState(sessionId, { announced: announced.filter((n) => n !== name) });
+  return true;
 }
 
 // ----------------------------------------------------------------- main ----
@@ -516,6 +621,42 @@ function readStdin() {
 
 function emit(obj) {
   process.stdout.write(JSON.stringify(obj));
+}
+
+/**
+ * The agent-spawn tool (Agent / Task) carries the subagent's prompt as tool
+ * input. Prepending the knowledge there delivers it whole — unlike
+ * additionalContext, which the harness truncates past ~2KB.
+ */
+function handleSpawn(input, cfg, cwd) {
+  const ti = input.tool_input || {};
+  const name = ti.subagent_type || ti.agent_type;
+  if (!name) return null;
+
+  const records = recordsFor('agent', name, cwd, cfg);
+  if (!records) return null;
+
+  const out = {};
+  if (!consumeAnnouncement(input.session_id, name)) {
+    out.systemMessage = render('agent', name, records, cfg);
+  }
+
+  if (cfg.inject && cfg.injectVia === 'prompt' && typeof ti.prompt === 'string') {
+    const ctx = buildContext(name, records);
+    if (ctx) {
+      out.hookSpecificOutput = {
+        hookEventName: 'PreToolUse',
+        updatedInput: Object.assign({}, ti, {
+          prompt: ctx + '\n\n---\n\n' + ti.prompt,
+        }),
+      };
+      const prior = readState(input.session_id).injected || [];
+      writeState(input.session_id, { injected: prior.concat([name]) });
+      debug('agent', name, 'injected into spawn prompt', String(ctx.length), 'bytes');
+    }
+  }
+
+  return Object.keys(out).length ? out : null;
 }
 
 function handle(kind, name, input, cfg, cwd, hookEventName) {
@@ -545,14 +686,33 @@ function handle(kind, name, input, cfg, cwd, hookEventName) {
   }
 
   const records = files.map((f) => resolveKnowledgeFile(f, cwd, cfg));
-  const out = { systemMessage: render(kind, name, records, cfg) };
-
-  if (cfg.inject) {
-    const ctx = buildContext(name, records);
-    if (ctx) out.hookSpecificOutput = { hookEventName, additionalContext: ctx };
+  const out = {};
+  if (hookEventName === 'SubagentStart' && consumeAnnouncement(input.session_id, name)) {
+    debug(kind, name, 'report suppressed: already announced at prompt time');
+  } else {
+    out.systemMessage = render(kind, name, records, cfg);
   }
 
-  return out;
+  // Only stand down if the spawn hook actually delivered. If its matcher never
+  // fired, falling back to additionalContext is lossy — but silence is worse.
+  const viaPrompt =
+    cfg.injectVia === 'prompt' &&
+    hookEventName === 'SubagentStart' &&
+    consumeInjected(input.session_id, name);
+
+  if (cfg.inject && !viaPrompt) {
+    const ctx = buildContext(name, records);
+    if (ctx) {
+      out.hookSpecificOutput = { hookEventName, additionalContext: ctx };
+      if (cfg.injectVia === 'prompt') {
+        debug(kind, name, 'FALLBACK: spawn hook did not deliver, using additionalContext');
+      }
+    }
+  } else if (viaPrompt) {
+    debug(kind, name, 'injection already delivered via the spawn prompt');
+  }
+
+  return Object.keys(out).length ? out : null;
 }
 
 function main() {
@@ -574,11 +734,21 @@ function main() {
 
   if (event === 'UserPromptSubmit') {
     if (cfg.trigger === 'explicit') recordExplicitMentions(input);
+    if (cfg.announceOnPrompt) {
+      const out = announceMentions(input, cfg, cwd);
+      if (out) emit(out);
+    }
     return;
   }
 
   if (event === 'SubagentStart') {
     const out = handle('agent', input.agent_type, input, cfg, cwd, 'SubagentStart');
+    if (out) emit(out);
+    return;
+  }
+
+  if (event === 'PreToolUse' && (input.tool_name === 'Agent' || input.tool_name === 'Task')) {
+    const out = handleSpawn(input, cfg, cwd);
     if (out) emit(out);
     return;
   }

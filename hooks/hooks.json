@@ -1,5 +1,5 @@
 {
-  "description": "kload — resolve and load agent/skill knowledge files",
+  "description": "kload \u2014 resolve and load agent/skill knowledge files",
   "hooks": {
     "SubagentStart": [
       {
@@ -13,6 +13,16 @@
       }
     ],
     "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/kload.js\"",
+            "timeout": 10
+          }
+        ]
+      },
       {
         "matcher": "Skill",
         "hooks": [

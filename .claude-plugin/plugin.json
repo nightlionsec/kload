@@ -1,7 +1,7 @@
 {
   "name": "kload",
   "description": "Loads the knowledge_files declared in an agent or skill definition, shows you exactly what resolved on disk, and injects the contents into the agent's context.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": { "name": "Night Lion" },
   "keywords": ["knowledge", "agents", "skills", "context", "hooks"]
 }
