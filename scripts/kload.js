@@ -348,7 +348,9 @@ function resolveKnowledgeFile(declared, cwd, cfg) {
 
   rec.content = content;
   rec.bytes = Buffer.byteLength(content, 'utf8');
-  rec.lines = content.split('\n').length;
+  // A trailing newline terminates the last line, it does not start a new one.
+  // Must agree with `wc -l`, or the count can't be used to spot a stale symlink.
+  rec.lines = content.split('\n').length - (content.endsWith('\n') ? 1 : 0);
   rec.tokens = Math.round(rec.bytes / 4);
   rec.status = 'ok';
   return rec;
