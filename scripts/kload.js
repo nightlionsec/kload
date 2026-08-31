@@ -56,8 +56,10 @@ const DEFAULT_CONFIG = {
   trigger: 'declared',
   // Phase 2. false = show the report only, inject nothing.
   inject: false,
-  // Show per-file token estimates and a total.
-  showTokens: true,
+  // Per-file token estimates. Off — line counts are the signal that matters.
+  showTokens: false,
+  // ANSI colour: 'auto' | 'always' | 'never'.
+  color: 'auto',
 };
 
 function expand(p, cwd) {
@@ -362,7 +364,26 @@ function shortPath(p) {
 
 // -------------------------------------------------------------- display ----
 
-const MARK = { ok: '✓', missing: '✗', 'broken-symlink': '✗', unreadable: '✗', empty: '✗' };
+const ANSI = {
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  dim: '\x1b[2m',
+  green: '\x1b[32m',
+  red: '\x1b[31m',
+  cyan: '\x1b[36m',
+};
+
+function colorEnabled(cfg) {
+  if (cfg.color === 'never') return false;
+  if (cfg.color === 'always') return true;
+  // auto: honour the usual opt-outs. stdout is a pipe to the CLI, not a tty,
+  // so tty detection tells us nothing here — assume the renderer can show it.
+  if (process.env.NO_COLOR) return false;
+  if (process.env.TERM === 'dumb') return false;
+  return true;
+}
+
+const MARK = { ok: '\u2713', missing: '\u2717', 'broken-symlink': '\u2717', unreadable: '\u2717', empty: '\u2717' };
 
 function fmtTokens(n) {
   if (!n) return '';
@@ -371,8 +392,16 @@ function fmtTokens(n) {
 }
 
 function render(kind, name, records, cfg) {
+  const c = colorEnabled(cfg);
+  const paint = (code, s) => (c ? code + s + ANSI.reset : s);
+
   const lines = [];
-  lines.push(`Loading ${name} ${kind}`);
+  lines.push(
+    paint(ANSI.bold, 'Loading knowledge files') +
+      paint(ANSI.dim, ' \u00b7 ') +
+      paint(ANSI.cyan, `${name} ${kind}`)
+  );
+  lines.push('');
 
   const ok = records.filter((r) => r.status === 'ok');
 
@@ -385,28 +414,34 @@ function render(kind, name, records, cfg) {
 
   const width = Math.max(...records.map((r) => r.declared.length));
   for (const r of records) {
-    const mark = MARK[r.status] || '?';
+    const good = r.status === 'ok';
+    const mark = paint(good ? ANSI.green : ANSI.red, MARK[r.status] || '?');
     const pad = r.declared.padEnd(width);
-    if (r.status === 'ok') {
-      const meta = [`${r.lines} lines`];
-      if (cfg.showTokens) meta.push(fmtTokens(r.tokens));
-      let row = `  ${mark} ${pad}  ${meta.join(' · ')}`;
-      // Per-row target only when the files came from mixed locations.
+
+    let meta;
+    if (good) {
+      meta = `${r.lines} lines`;
+      if (cfg.showTokens) meta += ` \u00b7 ${fmtTokens(r.tokens)}`;
       if (!showRootOnce && r.realPath && r.realPath !== r.resolvedPath) {
-        row += `  → ${shortPath(r.realPath)}`;
+        meta += ` \u2192 ${shortPath(r.realPath)}`;
       }
-      lines.push(row);
+      meta = paint(ANSI.dim, meta);
     } else {
-      lines.push(`  ${mark} ${pad}  ${r.detail}`);
+      meta = paint(ANSI.red, r.detail);
     }
+    lines.push(`   ${mark}  ${pad}  ${meta}`);
   }
 
-  const total = ok.reduce((a, r) => a + r.tokens, 0);
+  lines.push('');
+
   const summary = [`${ok.length}/${records.length} loaded`];
-  if (cfg.showTokens && total) summary.push(fmtTokens(total));
+  if (cfg.showTokens) {
+    const total = ok.reduce((a, r) => a + r.tokens, 0);
+    if (total) summary.push(fmtTokens(total));
+  }
   if (showRootOnce) summary.push(`from ${shortPath(commonRealDir)}`);
-  summary.push(cfg.inject ? 'injected' : 'display only (injection off)');
-  lines.push(`  ${summary.join(' · ')}`);
+  if (!cfg.inject) summary.push('display only');
+  lines.push(paint(ANSI.dim, `   ${summary.join(' \u00b7 ')}`));
 
   return lines.join('\n');
 }

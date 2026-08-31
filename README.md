@@ -5,12 +5,16 @@ resolved on disk, and — once enabled — injects the contents into the agent's
 context so the agent never has to fetch its own knowledge.
 
 ```
-Loading data-review agent
-  ✓ profiling-method.md  264 lines · ~3.3K tok
-  ✓ field-decisions.md   170 lines · ~1.5K tok
-  ✓ bak-extract.md       177 lines · ~2.2K tok
-  3/3 loaded · ~6.9K tok · from ~/git/zora/knowledge · injected
+Loading knowledge files · data-review agent
+
+   ✓  profiling-method.md  275 lines
+   ✓  field-decisions.md   169 lines
+   ✗  bak-extract.md       not found
+
+   2/3 loaded · from ~/git/zora/knowledge · display only
 ```
+
+The header is bold, the agent name cyan, ✓ green, ✗ red, and counts dim.
 
 ## The problem
 
@@ -94,7 +98,8 @@ Optional. Defaults work with the standard layout. Put settings in
   "skillDirs":    ["{cwd}/.claude/skills",    "{claude}/skills"],
   "trigger": "declared",
   "inject": false,
-  "showTokens": true
+  "showTokens": false,
+  "color": "auto"
 }
 ```
 
@@ -102,6 +107,10 @@ Optional. Defaults work with the standard layout. Put settings in
 - `trigger`: `"declared"` acts on anything declaring knowledge files (default);
   `"explicit"` acts only on agents you `@agent-`mentioned in the last 10 minutes.
 - `inject`: `false` shows the report without touching the agent's context.
+- `showTokens`: adds a `~N tok` estimate per file and a total. Off by default —
+  line counts are the signal that matters.
+- `color`: `"auto"` emits ANSI unless `NO_COLOR` is set or `TERM=dumb`;
+  `"never"` if your terminal shows the escape codes literally.
 
 Env overrides: `KLOAD_KNOWLEDGE_DIRS` (colon-separated), `KLOAD_INJECT=1|0`,
 `KLOAD_TRIGGER`, `KLOAD_DEBUG=1` (appends to `~/.claude/kload-debug.log`).
