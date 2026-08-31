@@ -112,7 +112,7 @@ As a plugin:
 
 ```
 /plugin marketplace add ~/git/kload
-/plugin install kload@vinnytroia
+/plugin install kload@nightlion
 ```
 
 Or wire the hooks directly in `~/.claude/settings.json` — see

@@ -1,7 +1,7 @@
 {
-  "name": "vinnytroia",
-  "owner": { "name": "Vinny Troia" },
-  "metadata": { "description": "Plugins by Vinny Troia" },
+  "name": "nightlion",
+  "owner": { "name": "Night Lion" },
+  "metadata": { "description": "Claude Code plugins by Night Lion" },
   "plugins": [
     {
       "name": "kload",
