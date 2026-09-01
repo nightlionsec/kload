@@ -217,7 +217,7 @@ knowledge_files:
 ### Installing the plugin
 
 ```
-/plugin marketplace add vinnytroia/kload
+/plugin marketplace add nightlionsec/kload
 /plugin install kload@nightlion
 ```
 
@@ -250,7 +250,7 @@ cp -R examples/skills/kload-demo ~/.claude/skills/
 Without a clone:
 
 ```bash
-cd "$(mktemp -d)" && git clone --depth 1 https://github.com/vinnytroia/kload
+cd "$(mktemp -d)" && git clone --depth 1 https://github.com/nightlionsec/kload
 cd kload && mkdir -p ~/.claude/knowledge ~/.claude/agents ~/.claude/skills
 cp examples/knowledge/*.md ~/.claude/knowledge/
 cp examples/agents/*.md ~/.claude/agents/
