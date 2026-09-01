@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # Simulate a hook firing, without installing the plugin.
 #
-#   test/simulate.sh agent data-review
-#   test/simulate.sh skill validate-ai
-#   KLOAD_INJECT=1 test/simulate.sh agent data-review
+#   test/simulate.sh agent kload-demo
+#   test/simulate.sh skill kload-demo
+#   KLOAD_INJECT=1 test/simulate.sh agent kload-demo
+#
+# Pass a third argument to use a different working directory. The shipped
+# samples are self-contained — point at examples/ to exercise them:
+#
+#   test/simulate.sh agent kload-demo "$PWD/examples"
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-KIND="${1:-agent}"; NAME="${2:-data-review}"; CWD="${3:-$PWD}"
+KIND="${1:-agent}"; NAME="${2:-kload-demo}"; CWD="${3:-$PWD}"
 
 if [ "$KIND" = "agent" ]; then
   PAYLOAD=$(printf '{"session_id":"sim","cwd":"%s","hook_event_name":"SubagentStart","agent_id":"sim-1","agent_type":"%s"}' "$CWD" "$NAME")

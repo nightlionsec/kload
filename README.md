@@ -5,13 +5,12 @@ resolved on disk, and — once enabled — injects the contents into the agent's
 context so the agent never has to fetch its own knowledge.
 
 ```
-Loading knowledge files · data-review agent
+Loading knowledge files · kload-demo agent
 
-   ✓  profiling-method.md  275 lines
-   ✓  field-decisions.md   169 lines
-   ✗  bak-extract.md       not found
+   ✓  kload-demo.md   23 lines
+   ✓  house-style.md  11 lines
 
-   2/3 loaded · from ~/git/zora/knowledge · display only
+   2/2 loaded · display only
 ```
 
 The header is bold, the agent name cyan, ✓ green, ✗ red, and counts dim.
@@ -25,9 +24,9 @@ operating instructions for an agent.
 
 ```
 ~/.claude/knowledge/
-  field-decisions.md     which columns are PII and which get dropped
-  merge-quality.md       what makes a join key trustworthy
-  catalog.md             resolve datasets in the catalog before searching
+  house-style.md      the conventions the repo follows but never states
+  review-rules.md     what earns a blocking comment and what does not
+  deploy-order.md     the step everyone skips that costs an afternoon
 ```
 
 Three properties make one worth writing:
@@ -37,9 +36,9 @@ Three properties make one worth writing:
 - **Non-derivable.** If the agent could work it out by reading the repo, leave
   it out. Knowledge files are for what the code does *not* say — the mistake
   made in March, the field that lies, the join that looks valid and isn't.
-- **Addressed to an agent.** Written as instruction, not narrative. "Scope by
-  `breach`, never by `country` — `country` is un-normalised on the raw path"
-  beats three paragraphs of background.
+- **Addressed to an agent.** Written as instruction, not narrative. "Never
+  reformat a file you did not otherwise change" beats three paragraphs of
+  background.
 
 ### Why this is worth a plugin
 
@@ -61,8 +60,8 @@ local one, and the correspondence is a borrowed lens, not a cited standard.)
 
 The economics follow: one file, written once, read by every agent that declares
 it. Fixing a rule means editing one document rather than hunting the same
-paragraph across twenty-two agent definitions — which is precisely the drift
-that made this necessary.
+paragraph across twenty agent definitions — which is precisely the drift that
+made this necessary.
 
 ## The problem
 
@@ -70,6 +69,234 @@ Claude Code parses agent frontmatter but discards `knowledge_files` — nothing
 consumes it. Agents that declare knowledge silently run without it, and the only
 workaround is to ask the agent to fetch its own files, which is unverifiable
 from outside the model. kload gives that declaration a consumer.
+
+## Where knowledge files live
+
+Knowledge sits alongside the directories Claude Code already keeps, using the
+same user-level and project-level split:
+
+```
+~/.claude/
+  agents/            your agent definitions
+  skills/            your skill definitions
+  knowledge/         ← kload reads from here
+    house-style.md
+
+<your project>/.claude/
+  agents/
+  skills/
+  knowledge/         ← and here, checked in with the repo
+    deploy-order.md
+```
+
+A bare filename in a declaration is searched in the project directory first,
+then the user one — so a project can override a user-level file of the same
+name. Both roots are configurable; see [Configuration](#configuration).
+
+## Format
+
+Two formats matter: how a file is **declared**, and what goes **inside** it.
+
+### Declaring knowledge — agents
+
+Add a `knowledge_files` list to the YAML frontmatter of the agent definition:
+
+```yaml
+---
+name: my-reviewer
+description: Reviews changes against the house conventions.
+knowledge_files:
+  - house-style.md
+  - review-rules.md
+---
+
+You are a code reviewer. ...
+```
+
+### Declaring knowledge — skills
+
+Identical key, in the skill's `SKILL.md` frontmatter:
+
+```yaml
+---
+name: my-skill
+description: ...
+knowledge_files:
+  - house-style.md
+---
+```
+
+### Alternate form: a JSON string in `config:`
+
+Also supported, for definitions written against a runner that carries its
+settings as a JSON blob. The same file then works under both that runner and
+the Claude Code CLI:
+
+```yaml
+---
+name: my-reviewer
+config: |
+  { "knowledge_files": ["house-style.md", "review-rules.md"] }
+---
+```
+
+`knowledge_files` wins if both are present.
+
+### How a value resolves
+
+| Value | Treated as |
+|---|---|
+| `house-style.md` | bare filename — searched in each knowledge root, in order |
+| `sub/dir/rules.md` | contains `/` — path relative to the session working directory |
+| `~/notes/rules.md` | `~`-prefixed — expanded to `$HOME` |
+| `/etc/rules.md` | absolute — used exactly as given |
+
+### The knowledge file itself
+
+Plain markdown. No frontmatter, no required headings, no schema — the whole
+file is delivered verbatim. The only real constraints are editorial:
+
+```markdown
+# Deploy order
+
+- Migrations run before the image rolls, never after. The old pods read the
+  new schema fine; the new pods do not read the old one.
+- `deploy.sh --fast` skips the smoke test. It exists for rollbacks only.
+- The staging database is a restore of production from Sunday. Anything you
+  "fixed" there on Monday is gone.
+```
+
+Keep one domain per file and name the file after that domain. A file that has
+to be read in full to find the one relevant line is too long.
+
+## Try it in two minutes
+
+The repo ships a working demo — a knowledge file carrying a verification phrase
+no model could invent, plus an agent and a skill that declare it. Installing
+them is the fastest way to confirm the whole path works on your machine.
+
+See [Installing the sample files](#installing-the-sample-files) below, then
+mention the agent:
+
+```
+@agent-kload-demo
+```
+
+You should see the load report before the agent launches, and — with injection
+on — the agent should repeat the phrase `ORANGE-PELICAN-4417` back to you. If
+it reports the knowledge section as missing, injection is off or a hook did not
+fire; check `KLOAD_DEBUG=1` (see [Configuration](#configuration)).
+
+### Writing your own first file
+
+```bash
+mkdir -p ~/.claude/knowledge
+cat > ~/.claude/knowledge/house-style.md <<'EOF'
+# House style
+
+- Match the surrounding code — comment density, naming, and idiom come from the
+  file being edited, not from a general preference.
+- Prefer the smallest change that fully solves the problem.
+- Report a failing test with its output. Never describe unrun work as passing.
+EOF
+```
+
+Then declare it from any agent in `~/.claude/agents/`:
+
+```yaml
+---
+name: my-reviewer
+description: Reviews changes against the house conventions.
+knowledge_files:
+  - house-style.md
+---
+```
+
+## Install
+
+### Installing the plugin
+
+```
+/plugin marketplace add vinnytroia/kload
+/plugin install kload@nightlion
+```
+
+To work from a local clone instead:
+
+```
+/plugin marketplace add ~/git/kload
+/plugin install kload@nightlion
+```
+
+Or wire the hooks directly in `~/.claude/settings.json` — see
+`hooks/hooks.json` for the shape, replacing `${CLAUDE_PLUGIN_ROOT}` with the
+absolute repo path.
+
+Verify the install with an agent that declares nothing — kload should stay
+completely silent. Output on every prompt means a matcher is misconfigured.
+
+### Installing the sample files
+
+The samples in `examples/` mirror the `~/.claude/` layout, so installing them
+is a copy. From a clone of this repo:
+
+```bash
+mkdir -p ~/.claude/knowledge ~/.claude/agents ~/.claude/skills
+cp examples/knowledge/*.md   ~/.claude/knowledge/
+cp examples/agents/*.md      ~/.claude/agents/
+cp -R examples/skills/kload-demo ~/.claude/skills/
+```
+
+Without a clone:
+
+```bash
+cd "$(mktemp -d)" && git clone --depth 1 https://github.com/vinnytroia/kload
+cd kload && mkdir -p ~/.claude/knowledge ~/.claude/agents ~/.claude/skills
+cp examples/knowledge/*.md ~/.claude/knowledge/
+cp examples/agents/*.md ~/.claude/agents/
+cp -R examples/skills/kload-demo ~/.claude/skills/
+```
+
+That installs:
+
+| File | Lands in | Purpose |
+|---|---|---|
+| `kload-demo.md` | `~/.claude/knowledge/` | carries the verification phrase |
+| `house-style.md` | `~/.claude/knowledge/` | a second file, so you see two resolve |
+| `kload-demo.md` (agent) | `~/.claude/agents/` | declares both, reports what it got |
+| `kload-demo/SKILL.md` | `~/.claude/skills/` | same test on the skill path |
+
+To scope them to one project instead, copy into that project's
+`.claude/knowledge`, `.claude/agents`, and `.claude/skills` directories.
+
+### Turning injection on
+
+kload ships **display-only** — it shows the report without touching any
+agent's context. Nothing changes for your existing agents until you opt in:
+
+```bash
+mkdir -p ~/.claude
+cat > ~/.claude/kload.json <<'EOF'
+{ "inject": true }
+EOF
+```
+
+Before enabling it, rewrite any block that tells an agent to fetch its own
+knowledge — once kload delivers the content, those instructions are false, and
+an agent holding both the knowledge and an instruction saying it lacks the
+knowledge will load it twice and may report a read it never performed. Replace
+with a statement of what is present, plus what to do if it isn't:
+
+```
+<knowledge>
+  house-style.md and review-rules.md are attached below by kload and are
+  authoritative. If you do not see a "## Knowledge:" section for them in your
+  context, kload did not deliver them — say so in one line and stop.
+</knowledge>
+```
+
+That last sentence is the only end-to-end check in the system: kload verifies
+delivery to the boundary, the agent verifies receipt.
 
 ## How it works
 
@@ -120,33 +347,6 @@ Lossy beats silent.
    `general-purpose`) and plugin skills declare nothing, so they stay quiet
    without any special-casing.
 
-## Declaring knowledge
-
-Preferred — a first-class YAML key:
-
-```yaml
----
-name: data-review
-knowledge_files:
-  - field-decisions.md
-  - merge-quality.md
----
-```
-
-Also supported — the Zora shape, a JSON string in `config:`, so the same
-definition works under both the Zora runner and the CLI:
-
-```yaml
----
-name: data-review
-config: |
-  { "knowledge_files": ["field-decisions.md", "merge-quality.md"] }
----
-```
-
-Bare filenames are searched in the knowledge roots. A value containing `/`, or
-starting with `/` or `~`, is used as an exact path instead.
-
 ## Statuses
 
 | Mark | Status | Meaning |
@@ -159,6 +359,15 @@ starting with `/` or `~`, is used as an exact path instead.
 
 A ✗ never blocks the launch. The agent runs without that file and, when
 injection is on, is told in-context which files were unavailable.
+
+```
+Loading knowledge files · kload-demo agent
+
+   ✓  kload-demo.md   23 lines
+   ✗  house-style.md  not found in ~/.claude/knowledge
+
+   1/2 loaded · display only
+```
 
 ## Configuration
 
@@ -180,6 +389,7 @@ Optional. Defaults work with the standard layout. Put settings in
 ```
 
 - `{cwd}` = session working directory, `{claude}` = `~/.claude`, `~` = `$HOME`.
+  Roots are searched in the order listed, first hit wins.
 - `trigger`: `"declared"` acts on anything declaring knowledge files (default);
   `"explicit"` acts only on agents you `@agent-`mentioned in the last 10 minutes.
 - `inject`: `false` shows the report without touching the agent's context.
@@ -200,48 +410,25 @@ Env overrides: `KLOAD_KNOWLEDGE_DIRS` (colon-separated), `KLOAD_INJECT=1|0`,
 see which hooks actually fired, and the only way to catch a matcher that never
 registered).
 
-## Install
-
-As a plugin:
-
-```
-/plugin marketplace add ~/git/kload
-/plugin install kload@nightlion
-```
-
-Or wire the hooks directly in `~/.claude/settings.json` — see
-`hooks/hooks.json` for the shape, replacing `${CLAUDE_PLUGIN_ROOT}` with the
-absolute repo path.
-
 ## Testing without installing
 
 ```bash
-test/failopen.sh                          # invariant 1 — must be all PASS
-node test/parse-corpus.js                 # parse every agent + skill on disk
-test/simulate.sh agent data-review        # render what a launch would show
-test/simulate.sh skill es-field-mapper
-KLOAD_INJECT=1 test/simulate.sh agent data-review   # see the injected context
+test/failopen.sh                            # invariant 1 — must be all PASS
+node test/parse-corpus.js                   # parse every agent + skill on disk
+test/simulate.sh agent kload-demo           # render what a launch would show
+test/simulate.sh skill kload-demo
+KLOAD_INJECT=1 test/simulate.sh agent kload-demo    # see the injected context
+```
+
+The `examples/` directory is self-contained — it carries its own
+`examples/.claude/kload.json` pointing at its sibling `knowledge/`, `agents/`,
+and `skills/` folders. Pass it as the working directory to exercise the shipped
+samples without copying anything into `~/.claude`:
+
+```bash
+test/simulate.sh agent kload-demo "$PWD/examples"
+test/simulate.sh skill kload-demo "$PWD/examples"
 ```
 
 `scripts/probe.sh` is a diagnostic that captures a raw hook payload to
 `/tmp/kload-probe.jsonl` — use it when a hook isn't behaving as expected.
-
-## Turning injection on
-
-Injection is built and off by default. Before enabling it, rewrite any
-`<load_first>`-style block that tells the agent to fetch its own knowledge —
-once kload delivers the content, those instructions are false, and an agent
-holding both the knowledge and an instruction saying it lacks the knowledge will
-load it twice and may report a read it never performed. Replace with a statement
-of what is present, plus what to do if it isn't:
-
-```
-<knowledge>
-  field-decisions.md and merge-quality.md are attached below by kload and are
-  authoritative. If you do not see a "## Knowledge:" section for them in your
-  context, kload did not deliver them — say so in one line and stop.
-</knowledge>
-```
-
-That last sentence is the only end-to-end check in the system: kload verifies
-delivery to the boundary, the agent verifies receipt.

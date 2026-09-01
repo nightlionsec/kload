@@ -1,0 +1,6 @@
+{
+  "knowledgeDirs": ["{cwd}/knowledge"],
+  "agentDirs":     ["{cwd}/agents"],
+  "skillDirs":     ["{cwd}/skills"],
+  "inject": true
+}

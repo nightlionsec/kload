@@ -211,10 +211,11 @@ function unquote(s) {
  * Pull the knowledge_files declaration out of parsed frontmatter.
  * Preferred shape is a first-class YAML key:
  *     knowledge_files:
- *       - field-decisions.md
- * Legacy Zora shape is a JSON string in `config:`:
+ *       - house-style.md
+ * Alternate shape, for definitions written against a runner that carries its
+ * settings as a JSON blob, is a JSON string in `config:`:
  *     config: |
- *       { "knowledge_files": ["field-decisions.md"] }
+ *       { "knowledge_files": ["house-style.md"] }
  */
 function declaredKnowledge(fm) {
   const asList = (v) => {
