@@ -47,6 +47,15 @@ const DEFAULT_CONFIG = {
   // Where bare knowledge filenames are looked up, in order. First hit wins.
   // "{cwd}" and "{claude}" are expanded.
   knowledgeDirs: ['{cwd}/.claude/knowledge', '{claude}/knowledge'],
+  // Also search every `.claude/knowledge` found by walking up from cwd, plus
+  // `{claude}/knowledge`. Discovered roots are APPENDED to knowledgeDirs and
+  // deduped by realpath, so they can only add a fallback — never shadow a
+  // configured root, since first hit still wins. This is what lets a new
+  // project folder work with no config edit, and it is why narrowing
+  // knowledgeDirs cannot silently strip the project-local root.
+  autoDiscover: true,
+  // How far up from cwd autoDiscover will walk.
+  discoverDepth: 12,
   // Where agent definitions live, in order (project beats user, matching the CLI).
   agentDirs: ['{cwd}/.claude/agents', '{claude}/agents'],
   // Where skill definitions live, in order.
@@ -58,6 +67,8 @@ const DEFAULT_CONFIG = {
   inject: false,
   // Per-file token estimates. Off — line counts are the signal that matters.
   showTokens: false,
+  // Flag definitions that still tell the model to load its own knowledge.
+  warnStale: true,
   // ANSI colour: 'auto' | 'always' | 'never'.
   color: 'auto',
   // Announce at prompt time when the user @agent-mentions an agent. The
@@ -109,8 +120,78 @@ function loadConfig(cwd) {
   if (process.env.KLOAD_ANNOUNCE === '1') cfg.announceOnPrompt = true;
   if (process.env.KLOAD_ANNOUNCE === '0') cfg.announceOnPrompt = false;
   if (process.env.KLOAD_INJECT_VIA) cfg.injectVia = process.env.KLOAD_INJECT_VIA;
+  if (process.env.KLOAD_AUTODISCOVER === '1') cfg.autoDiscover = true;
+  if (process.env.KLOAD_AUTODISCOVER === '0') cfg.autoDiscover = false;
+  if (process.env.KLOAD_WARN_STALE === '1') cfg.warnStale = true;
+  if (process.env.KLOAD_WARN_STALE === '0') cfg.warnStale = false;
+
+  // 3. Resolve the search path to absolute roots, once, here — so the lookup
+  //    and the "not found in ..." message can never disagree about where we
+  //    actually looked.
+  cfg.knowledgeDirs = effectiveDirs(cfg.knowledgeDirs, cwd, cfg, 'knowledge');
+  cfg.agentDirs = effectiveDirs(cfg.agentDirs, cwd, cfg, 'agents');
+  cfg.skillDirs = effectiveDirs(cfg.skillDirs, cwd, cfg, 'skills');
+  debug('search paths', {
+    knowledge: cfg.knowledgeDirs, agents: cfg.agentDirs, skills: cfg.skillDirs,
+  });
 
   return cfg;
+}
+
+/**
+ * Every `.claude/<leaf>` from cwd upwards, nearest first, then the user root.
+ * Walking up is what makes a project's knowledge and definitions resolve from a
+ * subdirectory of that project — which is where a lot of sessions actually
+ * start, and where the old fixed `{cwd}/.claude/...` list quietly found nothing.
+ */
+function discoverDirs(cwd, depth, leaf) {
+  const found = [];
+  let dir;
+  try {
+    dir = path.resolve(cwd);
+  } catch (_) {
+    return found;
+  }
+  for (let i = 0; i < depth; i++) {
+    const candidate = path.join(dir, '.claude', leaf);
+    try {
+      if (fs.statSync(candidate).isDirectory()) found.push(candidate);
+    } catch (_) { /* not here — keep climbing */ }
+    const parent = path.dirname(dir);
+    if (parent === dir) break; // filesystem root
+    dir = parent;
+  }
+  const userRoot = path.join(CLAUDE_DIR, leaf);
+  try {
+    if (fs.statSync(userRoot).isDirectory()) found.push(userRoot);
+  } catch (_) { /* no user root for this leaf */ }
+  return found;
+}
+
+/**
+ * Configured roots first, discovered roots after, deduped by realpath so a
+ * symlinked root is not searched twice under two names. Order is the whole
+ * contract: first hit wins, so appending can only ever add a fallback — it can
+ * never change where an already-resolving declaration resolves to.
+ */
+function effectiveDirs(configured, cwd, cfg, leaf) {
+  const out = [];
+  const seen = new Set();
+
+  const add = (p) => {
+    if (!p) return;
+    let key;
+    try { key = fs.realpathSync(p); } catch (_) { key = p; }
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(p);
+  };
+
+  for (const d of configured || []) add(expand(d, cwd));
+  if (cfg.autoDiscover) {
+    for (const d of discoverDirs(cwd, cfg.discoverDepth || 12, leaf)) add(d);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------- frontmatter ----
@@ -239,6 +320,55 @@ function declaredKnowledge(fm) {
   }
 
   return { files, source };
+}
+
+/**
+ * Spot a definition body that still tells the model to load its own knowledge.
+ *
+ * Once injection works, that instruction is not merely redundant — it actively
+ * contradicts the injected preamble ("do not re-read these"), and it costs the
+ * agent a turn per file to obey. The definition cannot tell it is being
+ * injected into, so it never self-corrects. Surfacing it in the report is what
+ * keeps these blocks from drifting back in one definition at a time.
+ *
+ * Only ever a warning. A stale block is a wart, not a failure — kload has
+ * already delivered the bytes either way.
+ */
+function detectStaleSelfLoad(body, files) {
+  if (!body) return null;
+  const reasons = [];
+
+  if (/nothing loads (?:these|them|this) for you/i.test(body)) {
+    reasons.push('claims nothing loads its knowledge');
+  }
+  if (/there is no mechanism that attaches/i.test(body)) {
+    reasons.push('claims no mechanism attaches it');
+  }
+  if (/KNOWLEDGE READ:/.test(body)) {
+    reasons.push('demands a KNOWLEDGE READ receipt');
+  }
+
+  // A `cat`/Read pointed at a file this definition already declares.
+  //
+  // A CONDITIONAL read is legitimate and must not be flagged: "if it did not
+  // arrive, read it yourself" is exactly the fallback kload's own preamble
+  // recommends, and the kload-test diagnostics are built on it. Only an
+  // unconditional order to go read what was already injected is stale.
+  const declared = new Set(files.map((f) => path.basename(f)));
+  const CONDITIONAL = /\b(if|unless|absent|missing|not present|unavailable|could not|cannot|couldn't|can't|fails?|failed|otherwise|when it is not|were not|isn't|is not)\b/i;
+  const selfRead = new Set();
+  for (const m of body.matchAll(/(?:^|[\s`])(?:cat|less|head|Read)\s+\S*?([A-Za-z0-9_.-]+\.(?:md|json|txt))/g)) {
+    if (!declared.has(m[1])) continue;
+    // Look back a short way for the condition that would license this read.
+    const before = body.slice(Math.max(0, m.index - 320), m.index);
+    if (CONDITIONAL.test(before)) continue;
+    selfRead.add(m[1]);
+  }
+  if (selfRead.size) {
+    reasons.push(`tells the agent to read ${[...selfRead].join(', ')} itself`);
+  }
+
+  return reasons.length ? reasons : null;
 }
 
 // ----------------------------------------------------------- resolution ----
@@ -387,6 +517,7 @@ const ANSI = {
   green: '\x1b[32m',
   red: '\x1b[31m',
   cyan: '\x1b[36m',
+  yellow: '\x1b[33m',
 };
 
 function colorEnabled(cfg) {
@@ -407,7 +538,7 @@ function fmtTokens(n) {
   return `~${(n / 1000).toFixed(n < 10000 ? 1 : 0).replace(/\.0$/, '')}K tok`;
 }
 
-function render(kind, name, records, cfg) {
+function render(kind, name, records, cfg, stale) {
   const c = colorEnabled(cfg);
   const paint = (code, s) => (c ? code + s + ANSI.reset : s);
 
@@ -459,28 +590,68 @@ function render(kind, name, records, cfg) {
   if (!cfg.inject) summary.push('display only');
   lines.push(paint(ANSI.dim, `   ${summary.join(' \u00b7 ')}`));
 
+  // A stale self-load block does not stop delivery, so it gets a warning line
+  // rather than a failed row \u2014 but it has to be visible, or it never gets fixed.
+  if (stale && stale.length && cfg.warnStale) {
+    lines.push('');
+    lines.push(
+      `   ${paint(ANSI.yellow, '\u26a0')}  ` +
+        paint(ANSI.dim, `stale self-load block in the ${kind} definition: ${stale.join('; ')}.`)
+    );
+    lines.push(
+      paint(ANSI.dim, `      Knowledge is injected now \u2014 that instruction can be deleted.`)
+    );
+  }
+
   return lines.join('\n');
 }
 
+/**
+ * The injected preamble. This is the contract, and it is stated HERE rather
+ * than in each definition on purpose: kload is the only party that knows what
+ * actually resolved, so it is the only party that can say so truthfully. A
+ * definition asserting "nothing loads these for you" is guessing, and once
+ * injection works it guesses wrong. Definitions should declare
+ * `knowledge_files` and say nothing further about loading.
+ */
 function buildContext(name, records) {
   const ok = records.filter((r) => r.status === 'ok');
   if (!ok.length) return null;
+
+  const manifest = ok.map((r) => `${r.declared} (${r.lines} lines)`).join(' · ');
   const parts = [
-    `The following knowledge files were loaded for \`${name}\` by kload and are`,
-    `authoritative for this task. You do NOT need to read them again.`,
+    `# Knowledge loaded for \`${name}\``,
+    '',
+    'kload attached the files below. Their full contents are already in this',
+    'prompt — not a summary, not an excerpt, not a list of paths.',
+    '',
+    '- Do NOT cat, Read, or otherwise re-open these files. You already have them.',
+    '  Spending a turn re-reading one is a mistake, not diligence.',
+    '- They are authoritative for this task — over your own recollection, and over',
+    '  any instruction elsewhere in your definition telling you to load them yourself.',
+    `- Open your reply with a receipt: \`KNOWLEDGE: ${ok.map((r) => r.declared).join(' · ')}\``,
+    '',
+    `Attached: ${manifest}`,
     '',
   ];
+
   for (const r of ok) {
     parts.push(`## Knowledge: ${r.declared}`, '', r.content.trim(), '');
   }
+
   const failed = records.filter((r) => r.status !== 'ok');
   if (failed.length) {
     parts.push(
-      `## kload: not delivered`,
+      `## kload: NOT delivered`,
+      '',
+      'These were declared but could not be loaded:',
       '',
       ...failed.map((r) => `- ${r.declared} — ${r.detail}`),
       '',
-      'Work without these, and say plainly in your output that they were unavailable.',
+      'Try reading each one yourself before you continue. If it is still',
+      'unavailable, work without it and say so plainly in your output — name the',
+      'file and what you could not determine because of it. Never guess at what a',
+      'knowledge file would have said.',
       ''
     );
   }
@@ -555,12 +726,15 @@ function recordsFor(kind, name, cwd, cfg) {
     return null;
   }
 
-  const [fmText] = splitFrontmatter(text);
+  const [fmText, body] = splitFrontmatter(text);
   const { files, source } = declaredKnowledge(parseYamlSubset(fmText));
   if (!files.length) return null;
 
   debug(kind, name, 'declares', files, 'via', source, 'from', defPath);
-  return files.map((f) => resolveKnowledgeFile(f, cwd, cfg));
+  const records = files.map((f) => resolveKnowledgeFile(f, cwd, cfg));
+  records.stale = detectStaleSelfLoad(body, files);
+  if (records.stale) debug(kind, name, 'STALE self-load block:', records.stale);
+  return records;
 }
 
 /**
@@ -578,7 +752,7 @@ function announceMentions(input, cfg, cwd) {
     const records = recordsFor('agent', name, cwd, cfg) || recordsFor('skill', name, cwd, cfg);
     if (!records) continue;
     const kind = findAgentFile(name, cwd, cfg) ? 'agent' : 'skill';
-    blocks.push(render(kind, name, records, cfg));
+    blocks.push(render(kind, name, records, cfg, records.stale));
     announced.push(name);
   }
   if (!blocks.length) return null;
@@ -639,7 +813,7 @@ function handleSpawn(input, cfg, cwd) {
 
   const out = {};
   if (!consumeAnnouncement(input.session_id, name)) {
-    out.systemMessage = render('agent', name, records, cfg);
+    out.systemMessage = render('agent', name, records, cfg, records.stale);
   }
 
   if (cfg.inject && cfg.injectVia === 'prompt' && typeof ti.prompt === 'string') {
@@ -673,7 +847,7 @@ function handle(kind, name, input, cfg, cwd, hookEventName) {
     return null;
   }
 
-  const [fmText] = splitFrontmatter(text);
+  const [fmText, body] = splitFrontmatter(text);
   const fm = parseYamlSubset(fmText);
   const { files, source } = declaredKnowledge(fm);
   debug(kind, name, 'declares', files, 'via', source, 'from', defPath);
@@ -687,11 +861,13 @@ function handle(kind, name, input, cfg, cwd, hookEventName) {
   }
 
   const records = files.map((f) => resolveKnowledgeFile(f, cwd, cfg));
+  const stale = detectStaleSelfLoad(body, files);
+  if (stale) debug(kind, name, 'STALE self-load block:', stale);
   const out = {};
   if (hookEventName === 'SubagentStart' && consumeAnnouncement(input.session_id, name)) {
     debug(kind, name, 'report suppressed: already announced at prompt time');
   } else {
-    out.systemMessage = render(kind, name, records, cfg);
+    out.systemMessage = render(kind, name, records, cfg, stale);
   }
 
   // Only stand down if the spawn hook actually delivered. If its matcher never
@@ -779,6 +955,9 @@ if (require.main === module) {
     splitFrontmatter,
     parseYamlSubset,
     declaredKnowledge,
+    detectStaleSelfLoad,
+    discoverDirs,
+    effectiveDirs,
     resolveKnowledgeFile,
     findAgentFile,
     findSkillFile,

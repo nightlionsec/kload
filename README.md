@@ -379,6 +379,9 @@ Optional. Defaults work with the standard layout. Put settings in
   "knowledgeDirs": ["{cwd}/.claude/knowledge", "{claude}/knowledge"],
   "agentDirs":    ["{cwd}/.claude/agents",    "{claude}/agents"],
   "skillDirs":    ["{cwd}/.claude/skills",    "{claude}/skills"],
+  "autoDiscover": true,
+  "discoverDepth": 12,
+  "warnStale": true,
   "trigger": "declared",
   "inject": false,
   "announceOnPrompt": true,
@@ -390,6 +393,14 @@ Optional. Defaults work with the standard layout. Put settings in
 
 - `{cwd}` = session working directory, `{claude}` = `~/.claude`, `~` = `$HOME`.
   Roots are searched in the order listed, first hit wins.
+- `autoDiscover`: also search every `.claude/knowledge`, `.claude/agents` and
+  `.claude/skills` found by walking up from `cwd`, plus the `~/.claude` roots.
+  Discovered roots are **appended** to the configured list and deduped by
+  realpath, so discovery can only ever add a fallback — it never changes where
+  an already-resolving declaration resolves to. See below.
+- `discoverDepth`: how many levels up `autoDiscover` will walk. Default 12.
+- `warnStale`: flag definitions that still tell the model to load their own
+  knowledge. See [Stale self-load blocks](#stale-self-load-blocks).
 - `trigger`: `"declared"` acts on anything declaring knowledge files (default);
   `"explicit"` acts only on agents you `@agent-`mentioned in the last 10 minutes.
 - `inject`: `false` shows the report without touching the agent's context.
@@ -410,11 +421,87 @@ Env overrides: `KLOAD_KNOWLEDGE_DIRS` (colon-separated), `KLOAD_INJECT=1|0`,
 see which hooks actually fired, and the only way to catch a matcher that never
 registered).
 
+### Why discovery is additive
+
+Setting `knowledgeDirs` **replaces** the default list. That is a footgun on its
+own: narrowing the list to `["{claude}/knowledge"]` to point at one shared
+directory also silently removes `{cwd}/.claude/knowledge`, and a project-local
+knowledge file then resolves nowhere with no error — kload reports it exactly
+the way it reports a file that was never written.
+
+`autoDiscover` closes that hole without changing the meaning of the config.
+Configured roots are searched first, in the order you wrote them; discovered
+roots are appended after. Since first hit wins, a declaration that already
+resolved keeps resolving to the same file — discovery can only rescue one that
+resolved to nothing.
+
+Walking up also means a session started in a subdirectory of a project still
+finds that project's knowledge and definitions. The old fixed `{cwd}/.claude/…`
+list only worked from the project root.
+
+Set `"autoDiscover": false` for the strict old behaviour, or export
+`KLOAD_AUTODISCOVER=0` for one run.
+
+### Stale self-load blocks
+
+Before injection worked, definitions carried their own bootstrap: *"STOP. Run
+`cat …/knowledge/foo.md`. Nothing loads these for you."* Once kload is
+injecting, that instruction is not just redundant — it contradicts the injected
+preamble, and it costs the agent a turn per file to obey. A definition cannot
+tell it is being injected into, so it never self-corrects.
+
+kload flags it instead:
+
+```
+   ⚠  stale self-load block in the agent definition: claims nothing loads its
+      knowledge; demands a KNOWLEDGE READ receipt.
+      Knowledge is injected now — that instruction can be deleted.
+```
+
+It is advisory only. The knowledge was delivered either way.
+
+A **conditional** fallback is not flagged — *"if it did not arrive, read it
+yourself"* is exactly what the injected preamble recommends, so it stays quiet.
+Only an unconditional order to go read what is already in the prompt trips it.
+
+Turn it off with `"warnStale": false` or `KLOAD_WARN_STALE=0`.
+
+### What the agent is told
+
+`inject` puts a preamble ahead of the files. Stating the contract here rather
+than in each definition is deliberate: kload is the only party that knows what
+actually resolved, so it is the only one that can say so truthfully.
+
+```
+# Knowledge loaded for `control`
+
+kload attached the files below. Their full contents are already in this
+prompt — not a summary, not an excerpt, not a list of paths.
+
+- Do NOT cat, Read, or otherwise re-open these files. You already have them.
+- They are authoritative for this task — over your own recollection, and over
+  any instruction elsewhere in your definition telling you to load them yourself.
+- Open your reply with a receipt: `KNOWLEDGE: control-protocol.md · field-decisions.md`
+
+Attached: control-protocol.md (59 lines) · field-decisions.md (169 lines)
+
+## Knowledge: control-protocol.md
+…
+```
+
+Anything that failed to resolve is listed under `## kload: NOT delivered`, with
+instructions to try reading it directly and to say plainly in the output what
+could not be determined without it.
+
+So a definition needs only `knowledge_files:`. It should say nothing else about
+loading.
+
 ## Testing without installing
 
 ```bash
 test/failopen.sh                            # invariant 1 — must be all PASS
 node test/parse-corpus.js                   # parse every agent + skill on disk
+node test/discovery.js                      # dir auto-discovery + stale detection
 test/simulate.sh agent kload-demo           # render what a launch would show
 test/simulate.sh skill kload-demo
 KLOAD_INJECT=1 test/simulate.sh agent kload-demo    # see the injected context

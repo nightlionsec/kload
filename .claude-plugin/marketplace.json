@@ -5,7 +5,7 @@
   "plugins": [
     {
       "name": "kload",
-      "version": "0.1.2",
+      "version": "0.2.0",
       "source": "./",
       "description": "Knowledge-file loader for Claude Code agents and skills"
     }
