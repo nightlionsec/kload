@@ -7,7 +7,7 @@ context so the agent never has to fetch its own knowledge.
 **Codex support:** [Build, install, and use kload for Codex](codex/README.md).
 It follows the same authored agents, skills, and knowledge files, generates native
 Codex registrations, and injects complete knowledge at invocation. Claude and
-Codex have separate hook adapters and share the resolver; no Zora service is needed.
+Codex have separate hook adapters and share the resolver. Both work as standalone CLIs.
 The instructions below describe the Claude adapter.
 
 ```

@@ -89,7 +89,7 @@ const STALE = `
 <load_first>
 STOP. Before anything else, run:
 
-    cat ~/git/zora/knowledge/notes.md
+    cat ~/git/my-project/knowledge/notes.md
 
 **Nothing loads these for you.** There is no mechanism that attaches them.
 
@@ -102,7 +102,7 @@ ok('flags the old self-load block', !!stale && stale.length >= 3, JSON.stringify
 // The fallback kload's own preamble recommends must NOT be flagged.
 const CONDITIONAL = `
 Your knowledge arrives as \`## Knowledge: <name>\` sections.
-  - Absent -> load it yourself:  cat ~/git/zora/knowledge/notes.md
+  - Absent -> load it yourself:  cat ~/git/my-project/knowledge/notes.md
 Never guess at the contents of a knowledge file you could not obtain.`;
 ok('does not flag a conditional fallback read',
    K.detectStaleSelfLoad(CONDITIONAL, ['notes.md']) === null,
