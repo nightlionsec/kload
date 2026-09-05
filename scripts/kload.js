@@ -479,9 +479,20 @@ function resolveKnowledgeFile(declared, cwd, cfg) {
     return rec;
   }
 
+  // Optional bounded reads for hosts that require complete inline delivery.
+  // Unset for the existing Claude adapter, preserving its behavior.
+  if (cfg.maxFileBytes && st.size > cfg.maxFileBytes) {
+    rec.status = 'too-large';
+    rec.detail = `${st.size} bytes exceeds the ${cfg.maxFileBytes}-byte file limit`;
+    return rec;
+  }
+
   let content;
   try {
-    content = fs.readFileSync(target, 'utf8');
+    const raw = fs.readFileSync(target);
+    content = cfg.strictUtf8
+      ? new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(raw)
+      : raw.toString('utf8');
   } catch (e) {
     rec.status = 'unreadable';
     rec.detail = String(e.code || e.message);

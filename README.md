@@ -4,6 +4,12 @@ Loads the knowledge files an agent or skill declares, shows you exactly what
 resolved on disk, and — once enabled — injects the contents into the agent's
 context so the agent never has to fetch its own knowledge.
 
+**Codex support:** [Build, install, and use kload for Codex](codex/README.md).
+It follows the same authored agents, skills, and knowledge files, generates native
+Codex registrations, and injects complete knowledge at invocation. Claude and
+Codex have separate hook adapters and share the resolver; no Zora service is needed.
+The instructions below describe the Claude adapter.
+
 ```
 Loading knowledge files · kload-demo agent
 

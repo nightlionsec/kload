@@ -1,0 +1,9 @@
+{
+  "description": "kload for Codex: refresh shared definitions and deliver complete bounded knowledge payloads",
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "node \"${PLUGIN_ROOT}/scripts/codex.js\"", "timeout": 15, "additionalContextLimit": 0}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "node \"${PLUGIN_ROOT}/scripts/codex.js\"", "timeout": 15, "additionalContextLimit": 0}]}],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "node \"${PLUGIN_ROOT}/scripts/codex.js\"", "timeout": 15, "additionalContextLimit": 0}]}],
+    "SubagentStart": [{"hooks": [{"type": "command", "command": "node \"${PLUGIN_ROOT}/scripts/codex.js\"", "timeout": 15, "additionalContextLimit": 0}]}]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "kload",
+  "version": "0.3.0",
+  "description": "Load declared knowledge into native Codex skills and agents while keeping Claude definitions as the authored source.",
+  "author": { "name": "Night Lion" },
+  "interface": {
+    "displayName": "kload",
+    "shortDescription": "Shared agent definitions with verified knowledge delivery.",
+    "longDescription": "Registers generated Codex skills and agents, loads their declared knowledge at invocation, and records delivery hashes. Claude model settings stay with Claude; Codex models inherit unless overridden.",
+    "developerName": "Night Lion",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Check kload's shared agents, skills, and knowledge delivery."
+  }
+}
