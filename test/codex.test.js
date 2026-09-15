@@ -125,6 +125,20 @@ test('broken local symlink never falls through to a global file with the same na
   assert.equal(rec.content, null);
 });
 
+test('relative subpaths fall back to knowledge roots after the session cwd', () => {
+  const rooted = put(path.join(user, 'knowledge/map/searching.md'), 'ROOTED-MAP-KNOWLEDGE\n');
+  const cfg = { knowledgeDirs: [path.join(user, 'knowledge')], strictUtf8: true };
+  let rec = K.resolveKnowledgeFile('map/searching.md', root, cfg);
+  assert.equal(rec.status, 'ok');
+  assert.equal(rec.realPath, fs.realpathSync(rooted));
+  assert.equal(rec.content, 'ROOTED-MAP-KNOWLEDGE\n');
+
+  const local = put(path.join(root, 'map/searching.md'), 'CWD-MAP-KNOWLEDGE\n');
+  rec = K.resolveKnowledgeFile('map/searching.md', root, cfg);
+  assert.equal(rec.realPath, fs.realpathSync(local));
+  assert.equal(rec.content, 'CWD-MAP-KNOWLEDGE\n');
+});
+
 test('a large/empty/non-UTF8 required file is rejected rather than partially delivered', () => {
   for (const [name, bytes] of [['oversize', Buffer.alloc(C.MAX_CONTEXT + 1, 65)], ['empty', Buffer.from(' ')], ['invalid-utf8', Buffer.from([0xc3, 0x28])]]) {
     put(path.join(user, `knowledge/${name}.md`), bytes);

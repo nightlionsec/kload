@@ -422,11 +422,17 @@ function resolveKnowledgeFile(declared, cwd, cfg) {
     detail: '',
   };
 
-  // An explicit path (absolute, ~-prefixed, or containing a separator) is used
-  // as given. Bare filenames search the configured knowledge roots.
+  // Absolute and home-relative paths are used exactly as declared. Relative
+  // paths with a separator first use the session cwd, then fall back to each
+  // knowledge root. The fallback lets one shared definition work in runners
+  // that interpret `map/rules.md` as a path within their knowledge directory,
+  // while preserving cwd-relative paths whenever they already resolve.
   let candidates;
-  if (declared.startsWith('/') || declared.startsWith('~') || declared.includes('/')) {
+  if (declared.startsWith('/') || declared.startsWith('~')) {
     candidates = [expand(declared, cwd)];
+  } else if (declared.includes('/')) {
+    candidates = [path.resolve(cwd, expand(declared, cwd)),
+      ...cfg.knowledgeDirs.map((d) => path.join(expand(d, cwd), declared))];
   } else {
     candidates = cfg.knowledgeDirs.map((d) => path.join(expand(d, cwd), declared));
   }

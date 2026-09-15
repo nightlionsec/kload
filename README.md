@@ -153,7 +153,7 @@ config: |
 | Value | Treated as |
 |---|---|
 | `house-style.md` | bare filename — searched in each knowledge root, in order |
-| `sub/dir/rules.md` | contains `/` — path relative to the session working directory |
+| `sub/dir/rules.md` | contains `/` — path relative to the session working directory, then each knowledge root if absent there |
 | `~/notes/rules.md` | `~`-prefixed — expanded to `$HOME` |
 | `/etc/rules.md` | absolute — used exactly as given |
 
