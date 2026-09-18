@@ -168,6 +168,15 @@ test('symlinked SKILL file keeps the wrapper assets instead of copying its knowl
   assert.ok(!fs.existsSync(path.join(entry.target, 'large.md')));
 });
 
+test('skill containers are ignored while broken skill links remain visible', () => {
+  put(path.join(user, 'skills/synced/bucket/nested/SKILL.md'), 'managed container fixture');
+  fs.symlinkSync(path.join(user, 'skills/absent-target'), path.join(user, 'skills/broken-skill'));
+  const result = C.synchronize(root)[0];
+  assert.ok(!result.entries['skill:synced']);
+  assert.match(result.entries['skill:broken-skill'].error, /ENOENT/);
+  assert.ok(result.errors.some((error) => error.startsWith('skill:broken-skill:')));
+});
+
 test('foreign registrations are left alone; removed owned sources cannot run cached agents', () => {
   source('agent', 'foreign');
   const file = put(path.join(codex, 'agents/foreign.toml'), 'EXISTING CONTENT');

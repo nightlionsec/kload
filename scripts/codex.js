@@ -169,8 +169,18 @@ function sources(cfg, kind) {
       if (kind === 'agent' && !item.endsWith('.md')) continue;
       const name = item.replace(/\.md$/, '');
       if (!safeName(name) || found.has(name)) continue;
-      // Keep broken source links visible, so a stale export is disabled.
-      if (exists(source) || (kind === 'skill' && exists(path.join(dir, item)))) found.set(name, source);
+      if (exists(source)) {
+        found.set(name, source);
+        continue;
+      }
+      // Keep broken skill links visible, so a stale export is disabled. Ordinary
+      // directories without SKILL.md are containers, not malformed skills (for
+      // example Claude's managed ~/.claude/skills/synced bucket).
+      if (kind === 'skill') {
+        try {
+          if (fs.lstatSync(path.join(dir, item)).isSymbolicLink()) found.set(name, source);
+        } catch (_) { /* the source disappeared while scanning */ }
+      }
     }
   }
   return found;
