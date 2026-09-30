@@ -1,6 +1,6 @@
 {
   "name": "kload",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Load declared knowledge into native Codex skills and agents while keeping Claude definitions as the authored source.",
   "author": { "name": "Night Lion" },
   "interface": {

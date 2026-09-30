@@ -4,11 +4,17 @@ Loads the knowledge files an agent or skill declares, shows you exactly what
 resolved on disk, and — once enabled — injects the contents into the agent's
 context so the agent never has to fetch its own knowledge.
 
-**Codex support:** [Build, install, and use kload for Codex](codex/README.md).
-It follows the same authored agents, skills, and knowledge files, generates native
-Codex registrations, and injects complete knowledge at invocation. Claude and
-Codex have separate hook adapters and share the resolver. Both work as standalone CLIs.
-The instructions below describe the Claude adapter.
+One set of authored agents, skills, and knowledge files runs under three hosts.
+Each host has its own adapter over a shared resolver, and each works standalone:
+
+- **Claude Code**: hooks. The instructions below describe this adapter.
+- **OpenCode**: a plugin that registers the shared agents as native OpenCode
+  subagents and delivers the same knowledge on every agent spawn and skill load.
+  See [Installing for OpenCode](#installing-for-opencode), and
+  [kload for OpenCode](opencode/README.md) for the full reference.
+- **Codex**: [Build, install, and use kload for Codex](codex/README.md).
+  Generates native Codex registrations and injects complete knowledge at
+  invocation.
 
 ```
 Loading knowledge files · kload-demo agent
@@ -193,6 +199,9 @@ on — the agent should repeat the phrase `ORANGE-PELICAN-4417` back to you. If
 it reports the knowledge section as missing, injection is off or a hook did not
 fire; check `KLOAD_DEBUG=1` (see [Configuration](#configuration)).
 
+In OpenCode, use `@kload-demo`. A toast shows the report, and the task title
+ends in ` · kload 2/2`.
+
 ### Writing your own first file
 
 ```bash
@@ -241,6 +250,47 @@ absolute repo path.
 Verify the install with an agent that declares nothing — kload should stay
 completely silent. Output on every prompt means a matcher is misconfigured.
 
+### Installing for OpenCode
+
+OpenCode reads `.claude/skills` on its own but never `.claude/agents`. The kload
+plugin closes that gap: at startup it registers every agent in kload's agent
+roots as a native OpenCode subagent, and it delivers declared knowledge
+whenever an agent is spawned or a skill is loaded. There is no build step and
+no npm dependency. Requires OpenCode 1.18 or later.
+
+```bash
+mkdir -p ~/.config/opencode/plugins
+ln -s ~/git/kload/opencode/kload.js ~/.config/opencode/plugins/kload.js
+```
+
+Restart OpenCode, then check that the agents registered:
+
+```bash
+opencode agent list          # your agents appear as (subagent)
+opencode debug agent <name>  # translated model, steps and permissions
+```
+
+For a single project, link the file into `<project>/.opencode/plugins/`
+instead.
+
+Do not copy or symlink Claude agent files into `~/.config/opencode/agents/`.
+OpenCode reads that frontmatter as its own and gets it wrong: the Claude
+`model` becomes an invalid provider id, every agent turns into a primary agent,
+and unknown keys are sent to the model provider. Agents keep their Claude
+definitions, and OpenCode-specific settings go in the same file:
+
+```yaml
+runtimes:
+  opencode:
+    model: alibaba/qwen3.8-max   # provider/model; omit to inherit the caller's model
+```
+
+The subagent inherits the caller's model unless you set one here. Delivery is
+always on under OpenCode, and the `inject` switch below applies to Claude only.
+The load report shows as a toast, with ` · kload 3/3` appended to the task
+title and to the `Loaded skill:` line. See [kload for OpenCode](opencode/README.md)
+for tool-permission translation, overrides, receipts, and failure behaviour.
+
 ### Installing the sample files
 
 The samples in `examples/` mirror the `~/.claude/` layout, so installing them
@@ -277,8 +327,9 @@ To scope them to one project instead, copy into that project's
 
 ### Turning injection on
 
-kload ships **display-only** — it shows the report without touching any
-agent's context. Nothing changes for your existing agents until you opt in:
+Under Claude Code, kload ships **display-only**. It shows the report without
+touching any agent's context, and nothing changes for your existing agents until
+you opt in. (OpenCode and Codex always deliver.) To opt in:
 
 ```bash
 mkdir -p ~/.claude
@@ -511,6 +562,8 @@ node test/discovery.js                      # dir auto-discovery + stale detecti
 test/simulate.sh agent kload-demo           # render what a launch would show
 test/simulate.sh skill kload-demo
 KLOAD_INJECT=1 test/simulate.sh agent kload-demo    # see the injected context
+node --test test/opencode.test.js           # OpenCode adapter
+node --test test/codex.test.js              # Codex adapter
 ```
 
 The `examples/` directory is self-contained — it carries its own
